@@ -1751,10 +1751,6 @@
 
         if (e.boss) updateBoss(e, dt, d, toP);
       }
-      for (const c of state.covers) {
-        const d = Math.hypot(c.x - bomb.x, c.y - bomb.y);
-        if (d < radius + Math.max(c.w, c.h) / 2) c.hp = 0;
-      }
       state.covers = state.covers.filter(c => c.hp > 0);
       state.enemies = state.enemies.filter(e => !e.dead);
       if (state.enemies.length === 0 && state.locked) {
