@@ -946,13 +946,25 @@
       return 14;
     }
 
-    function isSpawnPointClear(p, minDist = 140, extraRadius = 24) {
+    function circleFitsWorld(x, y, r = 18) {
+      if (x < TILE * 2 || y < TILE * 2 || x > (MAP_W - 2) * TILE || y > (MAP_H - 2) * TILE) return false;
+      const samples = [
+        [0, 0], [r, 0], [-r, 0], [0, r], [0, -r],
+        [r * .7, r * .7], [-r * .7, r * .7], [r * .7, -r * .7], [-r * .7, -r * .7]
+      ];
+      for (const s of samples) {
+        if (isSolidWorld(x + s[0], y + s[1])) return false;
+      }
+      return true;
+    }
+
+    function isSpawnPointClear(p, minDist = 140, extraRadius = 42, bodyRadius = 18) {
       if (!p) return false;
       if (dist(p, state.player) < minDist) return false;
       const ex = state.exit.x + state.exit.w / 2;
       const ey = state.exit.y + state.exit.h / 2;
-      if (Math.hypot(p.x - ex, p.y - ey) < 150) return false;
-      if (isSolidWorld(p.x, p.y)) return false;
+      if (Math.hypot(p.x - ex, p.y - ey) < 170) return false;
+      if (!circleFitsWorld(p.x, p.y, bodyRadius)) return false;
       const occupied = [state.enemies, state.chests, state.bombs, state.covers, state.spikes, state.drops];
       for (const list of occupied) {
         for (const o of list) {
@@ -1134,20 +1146,22 @@
       return { rooms, start, end };
     }
 
-    function randomFloorAway(minDist = 140) {
+    function randomFloorAway(minDist = 140, extraRadius = 42, bodyRadius = 18) {
       const cells = state.reachableCells.length ? state.reachableCells : state.floorCells;
       for (let i = 0; i < 700 && cells.length; i++) {
         const c = cells[irand(0, cells.length - 1)];
         const p = { x: c.x * TILE + 16, y: c.y * TILE + 16 };
-        if (isSpawnPointClear(p, minDist)) return p;
+        if (isSpawnPointClear(p, minDist, extraRadius, bodyRadius)) return p;
       }
       for (const c of cells) {
         const p = { x: c.x * TILE + 16, y: c.y * TILE + 16 };
-        if (isSpawnPointClear(p, Math.min(minDist, 80))) return p;
+        if (isSpawnPointClear(p, Math.min(minDist, 90), Math.max(26, extraRadius * .75), bodyRadius)) return p;
       }
-      const fallback = { x: state.player.x + 180, y: state.player.y };
-      if (isSpawnPointClear(fallback, 0)) return fallback;
-      return { x: state.player.x + 180, y: state.player.y + 60 };
+      for (const c of state.floorCells) {
+        const p = { x: c.x * TILE + 16, y: c.y * TILE + 16 };
+        if (circleFitsWorld(p.x, p.y, bodyRadius) && dist(p, state.player) > 70) return p;
+      }
+      return { x: state.player.x, y: state.player.y };
     }
 
     function spawnRoom() {
@@ -1173,7 +1187,7 @@
       const bossRoom = state.room === state.maxRoom;
       if (bossRoom) {
         const bdef = BOSS[state.level - 1];
-        const p = randomFloorAway(220);
+        const p = randomFloorAway(240, 72, 34);
         state.boss = makeEnemy(p.x, p.y, "boss", Math.round(bdef.hp * state.difficulty.enemyHp), bdef.speed, bdef.color);
         Object.assign(state.boss, {
           name: bdef.name,
@@ -1194,7 +1208,6 @@
           ? Math.min(11, 1 + state.room + Math.floor(state.room / 2))
           : Math.min(20, 2 + state.room + state.level * 2 + Math.max(0, state.level - 2) * 2);
         for (let i = 0; i < count; i++) {
-          const p = randomFloorAway();
           const roll = Math.random();
           let kind;
           if (state.level === 1 && state.room <= 2) {
@@ -1204,6 +1217,9 @@
           } else {
             kind = roll < .24 ? "archer" : roll < .44 ? "brute" : roll < .64 ? "charger" : roll < .8 ? "bomber" : "crawler";
           }
+          const bodyRadius = (ENEMY_TYPES[kind]?.r || 16) + 6;
+          const spawnGap = state.level === 1 ? 72 : 60;
+          const p = randomFloorAway(155, spawnGap, bodyRadius);
           const hpBase = kind === "brute" ? 46 + state.level * 8 : kind === "archer" ? 28 + state.level * 6 : kind === "charger" ? 34 + state.level * 7 : kind === "bomber" ? 26 + state.level * 7 : 24 + state.level * 5;
           const hp = Math.round(hpBase * state.difficulty.enemyHp);
           const speed = kind === "crawler" ? 106 + state.level * 2 : kind === "brute" ? 66 : kind === "charger" ? 112 + state.level * 3 : kind === "bomber" ? 96 : 82;
@@ -1227,34 +1243,36 @@
 
     function spawnRoomObjects() {
       const points = [];
-      const reservePoint = (minDist = 120) => {
-        for (let i = 0; i < 40; i++) {
-          const p = randomFloorAway(minDist);
-          if (isSpawnPointClear(p, minDist)) {
-            points.push(p);
+      const reservePoint = (minDist = 120, gap = 54, bodyRadius = 18) => {
+        for (let i = 0; i < 70; i++) {
+          const p = randomFloorAway(minDist, gap, bodyRadius);
+          if (isSpawnPointClear(p, minDist, gap, bodyRadius) && points.every(q => Math.hypot(p.x - q.x, p.y - q.y) > gap + bodyRadius)) {
+            points.push({ x: p.x, y: p.y });
             return p;
           }
         }
-        return randomFloorAway(minDist);
+        const p = randomFloorAway(minDist, gap, bodyRadius);
+        points.push({ x: p.x, y: p.y });
+        return p;
       };
       const chestCount = Math.random() < .55 ? 1 : 0;
       for (let i = 0; i < chestCount; i++) {
-        const p = reservePoint(175);
+        const p = reservePoint(175, 70, 24);
         state.chests.push({ x: p.x, y: p.y, r: 18, opened: false });
       }
       const bombCount = irand(1, Math.min(4, state.level + 1));
       for (let i = 0; i < bombCount; i++) {
-        const p = reservePoint(145);
+        const p = reservePoint(145, 60, 20);
         state.bombs.push({ x: p.x, y: p.y, r: 16, fuse: 0, dead: false });
       }
       const coverCount = irand(3, 5 + Math.min(3, state.level));
       for (let i = 0; i < coverCount; i++) {
-        const p = reservePoint(160);
+        const p = reservePoint(165, 76, 30);
         state.covers.push({ x: p.x, y: p.y, w: irand(32, 58), h: irand(26, 46), hp: 3, kind: Math.random() < .5 ? "pillar" : "crate" });
       }
       const spikeCount = irand(2, 4 + Math.min(4, state.level));
       for (let i = 0; i < spikeCount; i++) {
-        const p = reservePoint(155);
+        const p = reservePoint(155, 58, 22);
         state.spikes.push({ x: p.x, y: p.y, r: 18, timer: rand(0, 1.8), period: rand(1.7, 2.5), active: false, hurtCd: 0 });
       }
     }
@@ -1980,21 +1998,38 @@
           const wx = x * TILE, wy = y * TILE;
           if (state.map[y][x] === 1) {
             drawPixelRect(wx, wy, TILE, TILE, th.wall);
-            drawPixelRect(wx, wy, TILE, 5, th.wallTop);
-            drawPixelRect(wx + 2, wy + 7, TILE - 4, TILE - 9, th.wall);
+            drawPixelRect(wx, wy, TILE, 6, th.wallTop);
+            drawPixelRect(wx + 2, wy + 8, TILE - 4, TILE - 10, th.wall);
+            drawPixelRect(wx + 4, wy + 10, 10, 3, "rgba(255,255,255,.08)");
+            drawPixelRect(wx + 17, wy + 20, 11, 3, "rgba(0,0,0,.18)");
+            if ((x + y) % 2 === 0) drawPixelRect(wx + 2, wy + 16, TILE - 4, 2, th.wallTop);
+            if ((x * 3 + y * 5) % 11 === 0) drawPixelRect(wx + 9, wy + 9, 5, 5, th.trim);
             if (tileAt(x, y + 1) === 0) drawPixelRect(wx, wy + TILE - 5, TILE, 5, th.trim);
             if (tileAt(x + 1, y) === 0) drawPixelRect(wx + TILE - 5, wy, 5, TILE, th.trim);
           } else {
             drawPixelRect(wx, wy, TILE, TILE, th.floor2);
             drawPixelRect(wx + 1, wy + 1, TILE - 2, TILE - 2, th.floor);
+            drawPixelRect(wx + 1, wy + 1, TILE - 2, 2, "rgba(255,255,255,.05)");
+            drawPixelRect(wx + 1, wy + TILE - 3, TILE - 2, 2, "rgba(0,0,0,.16)");
             if ((x + y) % 3 === 0) drawPixelRect(wx + 4, wy + 4, TILE - 8, 2, th.trim);
             if ((x * 7 + y * 11) % 13 === 0) drawPixelRect(wx + 20, wy + 18, 7, 5, "#302b2e");
             if ((x * 5 + y * 3) % 17 === 0) drawPixelRect(wx + 7, wy + 23, 4, 4, "#141316");
             if ((x + 2 * y) % 19 === 0) drawPixelRect(wx + 12, wy + 10, 3, 3, th.accent);
+            if ((x * 13 + y * 7 + state.level) % 23 === 0) {
+              drawPixelRect(wx + 5, wy + 13, 14, 2, "rgba(255,255,255,.07)");
+              drawPixelRect(wx + 18, wy + 15, 2, 9, "rgba(255,255,255,.07)");
+            }
+            if ((x * 9 + y * 4 + state.level) % 29 === 0) {
+              drawPixelRect(wx + 8, wy + 8, 5, 5, "rgba(0,0,0,.22)");
+              drawPixelRect(wx + 13, wy + 13, 7, 3, "rgba(0,0,0,.18)");
+            }
           }
         }
       }
-      for (const d of state.floorDots) drawPixelRect(d.x, d.y, 3, 3, d.c);
+      for (const d of state.floorDots) {
+        drawPixelRect(d.x, d.y, 3, 3, d.c);
+        if ((Math.floor(d.x + d.y) % 5) === 0) drawPixelRect(d.x + 4, d.y, 2, 2, "rgba(255,255,255,.09)");
+      }
     }
 
     function drawExit() {
@@ -2018,8 +2053,11 @@
       const cape = Math.sin(now() * 8) * 2 + step * 2;
       const atkPhase = p.anim === "attack" ? Math.min(1, p.animTime / .18) : 0;
       const lean = p.anim === "run" ? step * 2 : p.anim === "attack" ? 3 : 0;
-      ctx.globalAlpha = .35;
-      drawPixelRect(p.x - 18, p.y + 20, 36, 8, "#050506");
+      ctx.globalAlpha = .36;
+      ctx.fillStyle = "#050506";
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y + 22, 22, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
       if (p.anim === "dead") {
         drawPixelRect(p.x - 18, p.y + 4, 36, 16, "#36567d");
@@ -2028,28 +2066,51 @@
         ctx.globalAlpha = 1;
         return;
       }
-      ctx.globalAlpha = .32;
-      drawPixelRect(p.x - 26, p.y - 6 + bob, 52, 22, "#0d0f14");
+      ctx.save();
+      ctx.translate(p.x + lean, p.y + bob);
+      ctx.globalAlpha = .35;
+      ctx.fillStyle = "#11131a";
+      ctx.beginPath();
+      ctx.ellipse(0, 1, 23, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
-      drawPixelRect(p.x - 20 - p.faceX * 4 + lean, p.y - 10 + bob + cape, 12, 28, "#5b2635");
-      drawPixelRect(p.x + 8 - p.faceX * 4 + lean, p.y - 10 + bob - cape, 12, 28, "#7b2f3d");
-      drawPixelRect(p.x - 15 - squash, p.y - 13 + bob, 30 + squash * 2, 30, "#2f5a8a");
-      drawPixelRect(p.x - 12, p.y - 10 + bob, 24, 8, "#89aee0");
-      drawPixelRect(p.x - 13, p.y - 1 + bob, 26, 4, "#203b5d");
-      drawPixelRect(p.x - 11, p.y - 16 + bob, 22, 3, "#6d8fc0");
-      drawPixelRect(p.x - 10, p.y - 22 + bob, 20, 12, "#f0c48e");
-      drawPixelRect(p.x - 12, p.y - 24 + bob, 24, 6, "#5a3d2b");
-      drawPixelRect(p.x - 8, p.y - 26 + bob, 16, 3, "#a86f42");
-      drawPixelRect(p.x - 9, p.y - 28 + bob, 18, 4, "#c89a63");
+      ctx.fillStyle = "#5b2635";
+      ctx.beginPath();
+      ctx.moveTo(-18 - p.faceX * 3, -12 + cape);
+      ctx.lineTo(-7 - p.faceX * 6, 18 + cape * .3);
+      ctx.lineTo(-25 - p.faceX * 2, 18);
+      ctx.lineTo(-22 - p.faceX * 3, -5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#7b2f3d";
+      ctx.beginPath();
+      ctx.moveTo(18 - p.faceX * 3, -12 - cape);
+      ctx.lineTo(7 - p.faceX * 6, 18 - cape * .3);
+      ctx.lineTo(25 - p.faceX * 2, 18);
+      ctx.lineTo(22 - p.faceX * 3, -5);
+      ctx.closePath();
+      ctx.fill();
+      drawPixelRect(-16 - squash, -13, 32 + squash * 2, 31, "#162232");
+      drawPixelRect(-14 - squash, -15, 28 + squash * 2, 29, "#2f5a8a");
+      drawPixelRect(-11, -12, 22, 7, "#9fc6f2");
+      drawPixelRect(-14, -2, 28, 5, "#203b5d");
+      drawPixelRect(-12, 5, 24, 3, "#0f1825");
+      drawPixelRect(-15, -19, 30, 5, "#18243a");
+      drawPixelRect(-13, -25, 26, 16, "#2a1c18");
+      drawPixelRect(-10, -24, 20, 15, "#f0c48e");
+      drawPixelRect(-13, -27, 26, 7, "#5a3d2b");
+      drawPixelRect(-9, -30, 18, 4, "#c89a63");
+      drawPixelRect(-4, -11, 8, 3, "#d99a6a");
       const blink = Math.floor(now() * 2.7) % 9 === 0;
-      drawPixelRect(p.x - 7 + p.faceX * 3, p.y - 17 + p.faceY * 2, 3, blink ? 1 : 3, "#120f13");
-      drawPixelRect(p.x + 4 + p.faceX * 3, p.y - 17 + p.faceY * 2, 3, blink ? 1 : 3, "#120f13");
-      drawPixelRect(p.x - 15, p.y + 10 - bob + step * 2, 11, 12, "#26415f");
-      drawPixelRect(p.x + 4, p.y + 10 + bob - step * 2, 11, 12, "#26415f");
-      drawPixelRect(p.x - 14, p.y + 10 - bob + step * 2, 3, 12, "#7fc8ff");
-      drawPixelRect(p.x + 13, p.y + 10 + bob - step * 2, 3, 12, "#7fc8ff");
-      drawPixelRect(p.x - 16, p.y + 21 - bob + step * 2, 14, 3, "#1d2738");
-      drawPixelRect(p.x + 2, p.y + 21 + bob - step * 2, 14, 3, "#1d2738");
+      drawPixelRect(-7 + p.faceX * 3, -18 + p.faceY * 2, 3, blink ? 1 : 3, "#120f13");
+      drawPixelRect(4 + p.faceX * 3, -18 + p.faceY * 2, 3, blink ? 1 : 3, "#120f13");
+      drawPixelRect(-17, 12 - bob + step * 2, 12, 12, "#20344d");
+      drawPixelRect(5, 12 + bob - step * 2, 12, 12, "#20344d");
+      drawPixelRect(-16, 12 - bob + step * 2, 4, 12, "#7fc8ff");
+      drawPixelRect(13, 12 + bob - step * 2, 4, 12, "#7fc8ff");
+      drawPixelRect(-18, 23 - bob + step * 2, 15, 4, "#101824");
+      drawPixelRect(3, 23 + bob - step * 2, 15, 4, "#101824");
+      ctx.restore();
       const w = weapon();
       const reach = p.anim === "attack" ? 28 : 18;
       ctx.globalAlpha = .18;
@@ -2160,45 +2221,23 @@
       const wobble = e.boss ? Math.sin(now() * 5) * 2 : Math.sin(now() * 10 + e.x) * 1.5;
       if (e.elite) {
         ctx.save();
-        ctx.globalAlpha = .35 + Math.sin(now() * 8) * .08;
+        ctx.globalAlpha = .24 + Math.sin(now() * 8) * .06;
         ctx.fillStyle = "#ffce4f";
         ctx.beginPath();
-        ctx.arc(e.x, e.y + wobble, e.r + 14, 0, Math.PI * 2);
+        ctx.ellipse(e.x, e.y + wobble, e.r + 17, e.r + 12, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
       ctx.globalAlpha = .32;
-      drawPixelRect(e.x - e.r, e.y + e.r - 2, s, 7, "#050506");
+      ctx.fillStyle = "#050506";
+      ctx.beginPath();
+      ctx.ellipse(e.x, e.y + e.r - 1, e.r + 5, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.globalAlpha = e.hurtCd > 0 ? .55 : 1;
-      drawPixelRect(e.x - e.r - 2, e.y - e.r - 1 + wobble, s + 4, s + 2, "#111014");
-      drawPixelRect(e.x - e.r, e.y - e.r + wobble, s, s, e.color);
-      drawPixelRect(e.x - e.r + 2, e.y - e.r + 2 + wobble, s - 4, 6, "rgba(255,255,255,.12)");
       drawEnemySprite(e, wobble);
-      if (e.type === "archer") {
-        drawPixelRect(e.x - e.r - 7, e.y - 4 + wobble, 6, 18, "#9e7b47");
-        drawPixelRect(e.x + e.r + 1, e.y - 4 + wobble, 6, 18, "#9e7b47");
-        drawPixelRect(e.x - 7, e.y - 10 + wobble, 14, 9, "#d9c2a0");
-      } else if (e.type === "bomber") {
-        drawPixelRect(e.x - 9, e.y - e.r - 9 + wobble, 18, 10, e.fuse > 0 ? "#ffdf5a" : "#5a3726");
-        drawPixelRect(e.x - 4, e.y - e.r - 12 + wobble, 8, 4, "#ff8d4a");
-      } else if (e.type === "charger") {
-        drawPixelRect(e.x - e.r - 5, e.y - 4 + wobble, 7, 8, "#d9d0aa");
-        drawPixelRect(e.x + e.r - 2, e.y - 4 + wobble, 7, 8, "#d9d0aa");
-        drawPixelRect(e.x - 8, e.y - 9 + wobble, 16, 8, "#7f2f3d");
-      } else if (e.type === "brute") {
-        drawPixelRect(e.x - e.r + 2, e.y - e.r + 4 + wobble, s - 4, 8, "#49372e");
-        drawPixelRect(e.x - 9, e.y - 11 + wobble, 18, 8, "#c1aa7e");
-      }
-      drawPixelRect(e.x - e.r + 4, e.y - e.r - 6, s - 8, 5, "#241818");
-      drawPixelRect(e.x - e.r + 4, e.y - e.r - 6, (s - 8) * Math.max(0, e.hp / e.maxHp), 5, e.boss ? "#ffce4f" : "#d84b45");
-      drawPixelRect(e.x - 7, e.y - 3 + wobble, 4, 4, "#130f12");
-      drawPixelRect(e.x + 3, e.y - 3 + wobble, 4, 4, "#130f12");
-      drawPixelRect(e.x - 10, e.y + 6 + wobble, 20, 3, "#141015");
+      drawPixelRect(e.x - e.r + 4, e.y - e.r - 8, s - 8, 5, "#241818");
+      drawPixelRect(e.x - e.r + 4, e.y - e.r - 8, (s - 8) * Math.max(0, e.hp / e.maxHp), 5, "#d84b45");
       if (e.elite) drawPixelRect(e.x - 8, e.y - e.r - 13 + wobble, 16, 5, "#ffce4f");
-      if (e.boss) {
-        drawPixelRect(e.x - 26, e.y - e.r - 11 + wobble, 52, 9, "#d2a54f");
-        drawPixelRect(e.x - 22, e.y + e.r - 2 + wobble, 44, 7, "#593b29");
-      }
       ctx.globalAlpha = 1;
     }
 
@@ -2206,42 +2245,60 @@
       const phase = (Math.sin(now() * 6 + e.x * .02) + 1) * .5;
       const jump = e.type === "charger" ? Math.sin(now() * 14 + e.y) * 2 : 0;
       const sway = Math.sin(now() * 7 + e.x * .03) * 2;
-      drawPixelRect(e.x - 8, e.y - 10 + wobble, 16, 8, e.elite ? "#ffe07a" : "#1a1214");
-      drawPixelRect(e.x - 10, e.y - 2 + wobble, 20, 12, e.color);
-      drawPixelRect(e.x - 12, e.y + 8 + wobble + jump, 8, 12, "#241315");
-      drawPixelRect(e.x + 4, e.y + 8 + wobble - jump, 8, 12, "#241315");
-      drawPixelRect(e.x - 16, e.y - 2 + wobble, 6, 16, "#312129");
-      drawPixelRect(e.x + 10, e.y - 2 + wobble, 6, 16, "#312129");
-      drawPixelRect(e.x - 6, e.y - 8 + wobble, 4, 4, "#0e0b0d");
-      drawPixelRect(e.x + 2, e.y - 8 + wobble, 4, 4, "#0e0b0d");
+      const y = e.y + wobble;
+      ctx.save();
+      ctx.fillStyle = "#101014";
+      ctx.beginPath();
+      ctx.ellipse(e.x, y, e.r + 2, e.r + 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = e.color;
+      ctx.beginPath();
+      ctx.ellipse(e.x, y - 1, e.r, e.r + 1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = .18;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.ellipse(e.x - 5, y - 8, e.r * .45, 5, -.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
       if (e.type === "crawler") {
-        drawPixelRect(e.x - 12, e.y - 12 + wobble, 24, 5, "#8c6b5a");
-        drawPixelRect(e.x - 14, e.y - 4 + wobble, 28, 4, "#5a3f36");
+        drawPixelRect(e.x - 13, y - 13, 26, 5, "#8c6b5a");
+        drawPixelRect(e.x - 15, y - 5, 30, 4, "#5a3f36");
+        drawPixelRect(e.x - 19, y + 3, 8, 4, "#2d1d22");
+        drawPixelRect(e.x + 11, y + 3, 8, 4, "#2d1d22");
       } else if (e.type === "brute") {
-        drawPixelRect(e.x - 14, e.y - 16 + wobble, 28, 6, "#1e1618");
-        drawPixelRect(e.x - 12, e.y - 20 + wobble, 24, 8, "#d9c2a0");
-        drawPixelRect(e.x - 18, e.y - 8 + wobble, 36, 8, "#432c25");
+        drawPixelRect(e.x - 17, y - 14, 34, 8, "#1e1618");
+        drawPixelRect(e.x - 14, y - 20, 28, 8, "#d9c2a0");
+        drawPixelRect(e.x - 19, y - 6, 38, 9, "#432c25");
+        drawPixelRect(e.x - 16, y + 4, 32, 5, "#c1aa7e");
       } else if (e.type === "archer") {
-        drawPixelRect(e.x - 13, e.y - 18 + wobble, 26, 6, "#caa46f");
-        drawPixelRect(e.x - 16, e.y - 6 + wobble, 6, 18, "#6b4b2d");
-        drawPixelRect(e.x + 10, e.y - 6 + wobble, 6, 18, "#6b4b2d");
-        drawPixelRect(e.x - 8, e.y - 14 + wobble, 16, 4, "#efe1bf");
+        drawPixelRect(e.x - 14, y - 18, 28, 7, "#caa46f");
+        drawPixelRect(e.x - 18, y - 6, 6, 20, "#6b4b2d");
+        drawPixelRect(e.x + 12, y - 6, 6, 20, "#6b4b2d");
+        drawPixelRect(e.x - 9, y - 14, 18, 4, "#efe1bf");
+        drawPixelRect(e.x + 18, y - 13, 3, 27, "#9e7b47");
+        drawPixelRect(e.x + 20, y - 2, 12, 3, "#efe1bf");
       } else if (e.type === "bomber") {
-        drawPixelRect(e.x - 10, e.y - 16 + wobble, 20, 8, "#ff8d4a");
-        drawPixelRect(e.x - 4, e.y - 22 + wobble, 8, 5, "#ffd35d");
-        drawPixelRect(e.x - 6, e.y - 10 + wobble, 12, 4, "#4d2519");
+        drawPixelRect(e.x - 11, y - 17, 22, 9, e.fuse > 0 ? "#ffdf5a" : "#ff8d4a");
+        drawPixelRect(e.x - 4, y - 24, 8, 6, "#ffd35d");
+        drawPixelRect(e.x - 7, y - 10, 14, 5, "#4d2519");
+        drawPixelRect(e.x - 14, y + 4, 28, 6, "#5c1f1c");
       } else if (e.type === "charger") {
-        drawPixelRect(e.x - 16, e.y - 14 + wobble, 10, 8, "#d9d0aa");
-        drawPixelRect(e.x + 6, e.y - 14 + wobble, 10, 8, "#d9d0aa");
-        drawPixelRect(e.x - 18, e.y + 2 + wobble, 6, 8, "#6b3d24");
-        drawPixelRect(e.x + 12, e.y + 2 + wobble, 6, 8, "#6b3d24");
-        drawPixelRect(e.x - 12 + sway, e.y - 20 + wobble, 24, 4, "#2a1118");
+        drawPixelRect(e.x - 18, y - 16, 11, 9, "#d9d0aa");
+        drawPixelRect(e.x + 7, y - 16, 11, 9, "#d9d0aa");
+        drawPixelRect(e.x - 20, y + 2 + jump, 7, 9, "#6b3d24");
+        drawPixelRect(e.x + 13, y + 2 - jump, 7, 9, "#6b3d24");
+        drawPixelRect(e.x - 13 + sway, y - 22, 26, 5, "#2a1118");
       }
+      drawPixelRect(e.x - 7, y - 4, 4, 4, "#0e0b0d");
+      drawPixelRect(e.x + 3, y - 4, 4, 4, "#0e0b0d");
+      drawPixelRect(e.x - 9, y + 7, 18, 3, "#141015");
       if (e.elite) {
-        drawPixelRect(e.x - 10, e.y - 28 + wobble, 20, 5, "#ffce4f");
-        drawPixelRect(e.x - 16, e.y + 14 + wobble, 8, 8, phase > .5 ? "#fff0c8" : "#ffce4f");
+        drawPixelRect(e.x - 11, y - 29, 22, 5, "#ffce4f");
+        drawPixelRect(e.x - 18, y + 14, 8, 8, phase > .5 ? "#fff0c8" : "#ffce4f");
       }
-      if (e.hurtCd > 0) drawPixelRect(e.x - 6, e.y - 4 + wobble, 12, 4, "#fff0c8");
+      if (e.hurtCd > 0) drawPixelRect(e.x - 7, y - 5, 14, 5, "#fff0c8");
+      ctx.restore();
     }
 
     function drawBoss(e) {
@@ -2416,18 +2473,28 @@
       const th = theme();
       ctx.save();
       ctx.globalAlpha = .35;
-      drawPixelRect(c.x - c.w / 2 + 3, c.y + c.h / 2 - 2, c.w - 6, 8, "#050506");
+      ctx.fillStyle = "#050506";
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y + c.h / 2, c.w * .48, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.globalAlpha = 1;
       if (c.kind === "pillar") {
-        drawPixelRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, th.wallTop);
-        drawPixelRect(c.x - c.w / 2 + 5, c.y - c.h / 2 + 5, c.w - 10, c.h - 10, th.wall);
-        drawPixelRect(c.x - c.w / 2, c.y - c.h / 2, c.w, 6, th.accent);
-        drawPixelRect(c.x - c.w / 2, c.y + c.h / 2 - 6, c.w, 6, th.trim);
+        drawPixelRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, "#121015");
+        drawPixelRect(c.x - c.w / 2 + 3, c.y - c.h / 2, c.w - 6, c.h, th.wallTop);
+        drawPixelRect(c.x - c.w / 2 + 7, c.y - c.h / 2 + 7, c.w - 14, c.h - 14, th.wall);
+        drawPixelRect(c.x - c.w / 2 + 2, c.y - c.h / 2, c.w - 4, 7, th.accent);
+        drawPixelRect(c.x - c.w / 2 + 2, c.y + c.h / 2 - 8, c.w - 4, 8, th.trim);
+        drawPixelRect(c.x - c.w / 2 + 8, c.y - c.h / 2 + 12, 4, c.h - 22, "rgba(255,255,255,.12)");
+        drawPixelRect(c.x + c.w / 2 - 12, c.y - c.h / 2 + 12, 5, c.h - 22, "rgba(0,0,0,.18)");
       } else {
-        drawPixelRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, "#6b3d24");
-        drawPixelRect(c.x - c.w / 2 + 4, c.y - c.h / 2 + 4, c.w - 8, c.h - 8, "#9a6330");
+        drawPixelRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, "#2b1b14");
+        drawPixelRect(c.x - c.w / 2 + 3, c.y - c.h / 2 + 3, c.w - 6, c.h - 6, "#9a6330");
+        drawPixelRect(c.x - c.w / 2 + 4, c.y - c.h / 2 + 5, c.w - 8, 5, "#c18445");
         drawPixelRect(c.x - c.w / 2, c.y - 3, c.w, 5, "#2b1b14");
         drawPixelRect(c.x - 3, c.y - c.h / 2, 6, c.h, "#2b1b14");
+        drawPixelRect(c.x - c.w / 2 + 8, c.y + 5, c.w - 16, 3, "#6b3d24");
+        drawPixelRect(c.x - c.w / 2 + 8, c.y - 11, c.w - 16, 3, "#6b3d24");
+        drawPixelRect(c.x + c.w / 2 - 10, c.y - c.h / 2 + 5, 5, c.h - 10, "#4a2b1d");
       }
       ctx.restore();
     }
