@@ -642,6 +642,7 @@
       solids: [],
       floorDots: [],
       enemies: [],
+      reachableCells: [],
       projectiles: [],
       enemyProjectiles: [],
       particles: [],
@@ -708,6 +709,7 @@
         stamina: base.stamina,
         range: base.range,
         color: base.color,
+        outline: q.color,
         crit: q.crit,
         atkSpeed: q.atkSpeed,
         move: q.move,
@@ -915,18 +917,38 @@
       return tileAt(Math.floor(x / TILE), Math.floor(y / TILE)) === 1;
     }
 
+    function cellIsOpenSafe(x, y) {
+      if (tileAt(x, y) !== 0) return false;
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          if (tileAt(x + ox, y + oy) !== 0) return false;
+        }
+      }
+      return true;
+    }
+
     function refreshFloorCells() {
       state.floorCells = [];
+      state.reachableCells = [];
       for (let y = 1; y < MAP_H - 1; y++) {
         for (let x = 1; x < MAP_W - 1; x++) {
-          if (tileAt(x, y) !== 0) continue;
-          let open = true;
-          for (let oy = -1; oy <= 1; oy++) {
-            for (let ox = -1; ox <= 1; ox++) {
-              if (tileAt(x + ox, y + oy) === 1) open = false;
-            }
-          }
-          if (open) state.floorCells.push({ x, y });
+          if (cellIsOpenSafe(x, y)) state.floorCells.push({ x, y });
+        }
+      }
+      const startX = Math.floor(state.player.x / TILE);
+      const startY = Math.floor(state.player.y / TILE);
+      if (tileAt(startX, startY) !== 0) return;
+      const q = [{ x: startX, y: startY }];
+      const seen = new Set([startX + "," + startY]);
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      for (let qi = 0; qi < q.length && qi < 1200; qi++) {
+        const n = q[qi];
+        if (cellIsOpenSafe(n.x, n.y)) state.reachableCells.push({ x: n.x, y: n.y });
+        for (const d of dirs) {
+          const nx = n.x + d[0], ny = n.y + d[1], key = nx + "," + ny;
+          if (seen.has(key) || tileAt(nx, ny) !== 0) continue;
+          seen.add(key);
+          q.push({ x: nx, y: ny });
         }
       }
     }
@@ -1037,7 +1059,7 @@
     }
 
     function randomFloorAway(minDist = 140) {
-      const cells = state.floorCells.length ? state.floorCells : [];
+      const cells = state.reachableCells.length ? state.reachableCells : state.floorCells;
       for (let i = 0; i < 700 && cells.length; i++) {
         const c = cells[irand(0, cells.length - 1)];
         const p = { x: c.x * TILE + 16, y: c.y * TILE + 16 };
@@ -1392,7 +1414,7 @@
       const d = state.nearbyGear;
       if (!d || d.dead || !d.gear || state.phase !== "running") return false;
       const p = state.player;
-      p.equipped = { ...d.gear };
+      p.equipped = JSON.parse(JSON.stringify(d.gear));
       p.weapon = d.gear.id;
       p.owned.add(d.gear.id);
       recalcStats();
@@ -1685,16 +1707,18 @@
         for (let x = 0; x < MAP_W; x++) {
           const wx = x * TILE, wy = y * TILE;
           if (state.map[y][x] === 1) {
-            drawPixelRect(wx, wy, TILE, TILE, "#20191d");
-            drawPixelRect(wx, wy, TILE, 6, "#35272a");
-            drawPixelRect(wx + 3, wy + 8, TILE - 6, TILE - 10, "#2a2024");
-            if (tileAt(x, y + 1) === 0) drawPixelRect(wx, wy + TILE - 5, TILE, 5, "#4a352e");
+            drawPixelRect(wx, wy, TILE, TILE, "#21191e");
+            drawPixelRect(wx, wy, TILE, 5, "#3a2a2d");
+            drawPixelRect(wx + 2, wy + 7, TILE - 4, TILE - 9, "#2a2024");
+            if (tileAt(x, y + 1) === 0) drawPixelRect(wx, wy + TILE - 5, TILE, 5, "#4c352f");
+            if (tileAt(x + 1, y) === 0) drawPixelRect(wx + TILE - 5, wy, 5, TILE, "#4c352f");
           } else {
-            drawPixelRect(wx, wy, TILE, TILE, "#18181c");
+            drawPixelRect(wx, wy, TILE, TILE, "#17181b");
             drawPixelRect(wx + 1, wy + 1, TILE - 2, TILE - 2, "#222126");
-            if ((x + y) % 3 === 0) drawPixelRect(wx + 4, wy + 4, TILE - 8, 2, "#29252a");
+            if ((x + y) % 3 === 0) drawPixelRect(wx + 4, wy + 4, TILE - 8, 2, "#2a252b");
             if ((x * 7 + y * 11) % 13 === 0) drawPixelRect(wx + 20, wy + 18, 7, 5, "#302b2e");
             if ((x * 5 + y * 3) % 17 === 0) drawPixelRect(wx + 7, wy + 23, 4, 4, "#141316");
+            if ((x + 2 * y) % 19 === 0) drawPixelRect(wx + 12, wy + 10, 3, 3, "#3d3438");
           }
         }
       }
@@ -1724,23 +1748,25 @@
       ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
       if (p.anim === "dead") {
         drawPixelRect(p.x - 18, p.y + 4, 36, 16, "#36567d");
+        drawPixelRect(p.x - 20, p.y + 2, 40, 4, "#111216");
         drawPixelRect(p.x - 24, p.y + 8, 12, 8, "#f0c48e");
         ctx.globalAlpha = 1;
         return;
       }
-      drawPixelRect(p.x - 17 - p.faceX * 3, p.y - 6 + bob, 10, 24, "#7b2f3d");
-      drawPixelRect(p.x - 14 - squash, p.y - 14 + bob, 28 + squash * 2, 28, "#4f83c2");
-      drawPixelRect(p.x - 10, p.y - 9 + bob, 20, 6, "#86a9d8");
-      drawPixelRect(p.x - 13, p.y - 2 + bob, 26, 4, "#2d507b");
-      drawPixelRect(p.x - 16, p.y - 12 + bob, 5, 20, "#d6bd7b");
-      drawPixelRect(p.x + 11, p.y - 12 + bob, 5, 20, "#d6bd7b");
-      drawPixelRect(p.x - 10, p.y - 22 + bob, 20, 14, "#f0c48e");
-      drawPixelRect(p.x - 11, p.y - 25 + bob, 22, 7, "#50322b");
+      drawPixelRect(p.x - 18 - p.faceX * 2, p.y - 8 + bob, 8, 16, "#6d2c39");
+      drawPixelRect(p.x + 10 - p.faceX * 2, p.y - 8 + bob, 8, 16, "#6d2c39");
+      drawPixelRect(p.x - 15 - squash, p.y - 13 + bob, 30 + squash * 2, 30, "#2f5a8a");
+      drawPixelRect(p.x - 12, p.y - 10 + bob, 24, 8, "#89aee0");
+      drawPixelRect(p.x - 13, p.y - 1 + bob, 26, 4, "#203b5d");
+      drawPixelRect(p.x - 10, p.y - 22 + bob, 20, 12, "#f0c48e");
+      drawPixelRect(p.x - 12, p.y - 24 + bob, 24, 6, "#5a3d2b");
       drawPixelRect(p.x - 8, p.y - 26 + bob, 16, 3, "#a86f42");
-      drawPixelRect(p.x - 7 + p.faceX * 3, p.y - 17 + p.faceY * 2, 4, 3, "#161016");
-      drawPixelRect(p.x + 3 + p.faceX * 3, p.y - 17 + p.faceY * 2, 4, 3, "#161016");
-      drawPixelRect(p.x - 16, p.y + 10 - bob + step * 2, 10, 12, "#2c4d78");
-      drawPixelRect(p.x + 6, p.y + 10 + bob - step * 2, 10, 12, "#2c4d78");
+      drawPixelRect(p.x - 7 + p.faceX * 3, p.y - 17 + p.faceY * 2, 3, 3, "#120f13");
+      drawPixelRect(p.x + 4 + p.faceX * 3, p.y - 17 + p.faceY * 2, 3, 3, "#120f13");
+      drawPixelRect(p.x - 15, p.y + 10 - bob + step * 2, 11, 12, "#26415f");
+      drawPixelRect(p.x + 4, p.y + 10 + bob - step * 2, 11, 12, "#26415f");
+      drawPixelRect(p.x - 14, p.y + 10 - bob + step * 2, 3, 12, "#7fc8ff");
+      drawPixelRect(p.x + 13, p.y + 10 + bob - step * 2, 3, 12, "#7fc8ff");
       const w = weapon();
       const reach = p.anim === "attack" ? 28 : 18;
       ctx.globalAlpha = .35;
@@ -1753,6 +1779,7 @@
         ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
       }
       drawPixelRect(p.x + p.faceX * reach - 4, p.y + p.faceY * reach - 4, 8, 8, currentGear().qualityColor || w.color);
+      drawPixelRect(p.x + p.faceX * (reach + 4) - 2, p.y + p.faceY * (reach + 4) - 2, 4, 4, "#fff2d0");
       ctx.globalAlpha = 1;
     }
 
@@ -1781,27 +1808,29 @@
       ctx.globalAlpha = .32;
       drawPixelRect(e.x - e.r, e.y + e.r - 2, s, 7, "#050506");
       ctx.globalAlpha = e.hurtCd > 0 ? .55 : 1;
+      drawPixelRect(e.x - e.r - 2, e.y - e.r - 1 + wobble, s + 4, s + 2, "#111014");
       drawPixelRect(e.x - e.r, e.y - e.r + wobble, s, s, e.color);
-      drawPixelRect(e.x - e.r, e.y - e.r + wobble, s, 3, "#0f0d10");
-      drawPixelRect(e.x - e.r, e.y + e.r - 3 + wobble, s, 3, "#0f0d10");
-      drawPixelRect(e.x - e.r, e.y - e.r + wobble, 3, s, "#0f0d10");
-      drawPixelRect(e.x + e.r - 3, e.y - e.r + wobble, 3, s, "#0f0d10");
-      drawPixelRect(e.x - e.r + 4, e.y - e.r + 4 + wobble, s - 8, 5, "rgba(255,255,255,.12)");
+      drawPixelRect(e.x - e.r + 2, e.y - e.r + 2 + wobble, s - 4, 6, "rgba(255,255,255,.12)");
       if (e.type === "archer") {
-        drawPixelRect(e.x - e.r - 7, e.y - 3 + wobble, 6, 18, "#9e7b47");
-        drawPixelRect(e.x + e.r + 1, e.y - 3 + wobble, 6, 18, "#9e7b47");
+        drawPixelRect(e.x - e.r - 7, e.y - 4 + wobble, 6, 18, "#9e7b47");
+        drawPixelRect(e.x + e.r + 1, e.y - 4 + wobble, 6, 18, "#9e7b47");
+        drawPixelRect(e.x - 7, e.y - 10 + wobble, 14, 9, "#d9c2a0");
       } else if (e.type === "bomber") {
-        drawPixelRect(e.x - 7, e.y - e.r - 8 + wobble, 14, 8, e.fuse > 0 ? "#ffdf5a" : "#5a3726");
+        drawPixelRect(e.x - 9, e.y - e.r - 9 + wobble, 18, 10, e.fuse > 0 ? "#ffdf5a" : "#5a3726");
+        drawPixelRect(e.x - 4, e.y - e.r - 12 + wobble, 8, 4, "#ff8d4a");
       } else if (e.type === "charger") {
         drawPixelRect(e.x - e.r - 5, e.y - 4 + wobble, 7, 8, "#d9d0aa");
         drawPixelRect(e.x + e.r - 2, e.y - 4 + wobble, 7, 8, "#d9d0aa");
+        drawPixelRect(e.x - 8, e.y - 9 + wobble, 16, 8, "#7f2f3d");
       } else if (e.type === "brute") {
         drawPixelRect(e.x - e.r + 2, e.y - e.r + 4 + wobble, s - 4, 8, "#49372e");
+        drawPixelRect(e.x - 9, e.y - 11 + wobble, 18, 8, "#c1aa7e");
       }
       drawPixelRect(e.x - e.r + 4, e.y - e.r - 6, s - 8, 5, "#241818");
       drawPixelRect(e.x - e.r + 4, e.y - e.r - 6, (s - 8) * Math.max(0, e.hp / e.maxHp), 5, e.boss ? "#ffce4f" : "#d84b45");
       drawPixelRect(e.x - 7, e.y - 3 + wobble, 4, 4, "#130f12");
       drawPixelRect(e.x + 3, e.y - 3 + wobble, 4, 4, "#130f12");
+      drawPixelRect(e.x - 10, e.y + 6 + wobble, 20, 3, "#141015");
       if (e.boss) {
         drawPixelRect(e.x - 26, e.y - e.r - 11 + wobble, 52, 9, "#d2a54f");
         drawPixelRect(e.x - 22, e.y + e.r - 2 + wobble, 44, 7, "#593b29");
@@ -1869,10 +1898,11 @@
         ctx.arc(d.x, d.y + bob, near ? 26 : 20, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
-        drawPixelRect(d.x - 12, d.y - 9 + bob, 24, 18, "#151216");
-        drawPixelRect(d.x - 10, d.y - 7 + bob, 20, 14, d.gear.qualityColor);
-        drawPixelRect(d.x - 3, d.y - 16 + bob, 6, 24, d.gear.color);
-        drawPixelRect(d.x - 10, d.y + 7 + bob, 20, 4, "#fff0c8");
+        drawPixelRect(d.x - 13, d.y - 10 + bob, 26, 20, "#151216");
+        drawPixelRect(d.x - 11, d.y - 8 + bob, 22, 16, d.gear.outline || d.gear.qualityColor);
+        drawPixelRect(d.x - 8, d.y - 5 + bob, 16, 10, d.gear.color);
+        drawPixelRect(d.x - 2, d.y - 15 + bob, 4, 24, "#efe1bf");
+        drawPixelRect(d.x - 11, d.y + 8 + bob, 22, 3, "#fff0c8");
         if (near) {
           ctx.font = "12px Microsoft YaHei, sans-serif";
           ctx.textAlign = "center";
@@ -1959,7 +1989,7 @@
             return;
           }
           state.player.weapon = w.id;
-          state.player.equipped = { ...preview };
+          state.player.equipped = JSON.parse(JSON.stringify(preview));
           recalcStats();
           saveGame();
           state.shopStock[i] = makeLoot(w.id);

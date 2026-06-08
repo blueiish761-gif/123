@@ -538,8 +538,8 @@
     };
 
     const TILE = 32;
-    const MAP_W = 34;
-    const MAP_H = 22;
+    const MAP_W = 46;
+    const MAP_H = 30;
     const DPR_MAX = 2;
     const keys = new Set();
     const rand = (min, max) => Math.random() * (max - min) + min;
@@ -557,9 +557,9 @@
     ];
 
     const DIFFICULTIES = [
-      { id: "normal", name: "普通", desc: "推荐第一次游玩。", enemyHp: 1, enemyAtk: 1, reward: 1 },
-      { id: "hard", name: "困难", desc: "怪物更硬，魂晶更多。", enemyHp: 1.25, enemyAtk: 1.18, reward: 1.35 },
-      { id: "hell", name: "炼狱", desc: "高风险高收益。", enemyHp: 1.55, enemyAtk: 1.4, reward: 1.8 }
+      { id: "normal", name: "普通", desc: "推荐第一次游玩。", enemyHp: .86, enemyAtk: .82, reward: 1 },
+      { id: "hard", name: "困难", desc: "怪物更硬，魂晶更多。", enemyHp: 1.08, enemyAtk: 1.02, reward: 1.35 },
+      { id: "hell", name: "炼狱", desc: "高风险高收益。", enemyHp: 1.32, enemyAtk: 1.22, reward: 1.8 }
     ];
 
     const BOONS = [
@@ -570,7 +570,8 @@
       { id: "stone", name: "石肤", desc: "受到伤害 -12%，生命 +15。", apply: r => { r.damageTaken -= .12; r.maxHp += 15; } },
       { id: "fortune", name: "财运", desc: "金币与魂晶 +25%。", apply: r => { r.goldMult += .25; r.soulMult += .25; } },
       { id: "giant", name: "巨人挥击", desc: "近战范围 +18%，锤和剑更强。", apply: r => { r.meleeRange += .18; r.damage += .08; } },
-      { id: "focus", name: "专注", desc: "体力恢复 +35%，技能冷却更短。", apply: r => { r.staminaRegen += .35; r.atkSpeed += .06; } }
+      { id: "focus", name: "专注", desc: "体力恢复 +35%，技能冷却更短。", apply: r => { r.staminaRegen += .35; r.atkSpeed += .06; } },
+      { id: "mirror", name: "镜盾", desc: "攻击格挡敌方子弹，并将其反弹为你的弹幕。", apply: r => { r.reflect = true; r.damage += .05; } }
     ];
 
     const META_UPGRADES = [
@@ -635,10 +636,13 @@
       bannerText: "",
       locked: true,
       savedFlash: 0,
+      nearbyGear: null,
       map: [],
+      floorCells: [],
       solids: [],
       floorDots: [],
       enemies: [],
+      reachableCells: [],
       projectiles: [],
       enemyProjectiles: [],
       particles: [],
@@ -657,6 +661,7 @@
     };
 
     const joystick = { active: false, id: null, x: 0, y: 0, dx: 0, dy: 0 };
+    const aim = { active: false, id: null, sx: 0, sy: 0, dx: 0, dy: 0 };
     let audioCtx = null;
 
     function resize() {
@@ -704,6 +709,7 @@
         stamina: base.stamina,
         range: base.range,
         color: base.color,
+        outline: q.color,
         crit: q.crit,
         atkSpeed: q.atkSpeed,
         move: q.move,
@@ -714,6 +720,11 @@
 
     function currentGear() {
       if (!state.player.equipped) state.player.equipped = makeLoot(state.player.weapon);
+      const base = WEAPONS.find(w => w.id === state.player.equipped.id) || WEAPONS[0];
+      if (!state.player.equipped.qualityColor) {
+        const q = QUALITIES.find(q => q.id === state.player.equipped.quality) || QUALITIES[0];
+        state.player.equipped = { ...base, ...state.player.equipped, qualityColor: q.color, qualityName: q.name };
+      }
       return state.player.equipped;
     }
 
@@ -745,6 +756,7 @@
         lifesteal: hero.lifesteal,
         damage: meta.blade * .04,
         projectileDamage: 0,
+        reflect: false,
         damageTaken: 0,
         meleeRange: 0,
         staminaRegen: 0,
@@ -905,6 +917,42 @@
       return tileAt(Math.floor(x / TILE), Math.floor(y / TILE)) === 1;
     }
 
+    function cellIsOpenSafe(x, y) {
+      if (tileAt(x, y) !== 0) return false;
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          if (tileAt(x + ox, y + oy) !== 0) return false;
+        }
+      }
+      return true;
+    }
+
+    function refreshFloorCells() {
+      state.floorCells = [];
+      state.reachableCells = [];
+      for (let y = 1; y < MAP_H - 1; y++) {
+        for (let x = 1; x < MAP_W - 1; x++) {
+          if (cellIsOpenSafe(x, y)) state.floorCells.push({ x, y });
+        }
+      }
+      const startX = Math.floor(state.player.x / TILE);
+      const startY = Math.floor(state.player.y / TILE);
+      if (tileAt(startX, startY) !== 0) return;
+      const q = [{ x: startX, y: startY }];
+      const seen = new Set([startX + "," + startY]);
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      for (let qi = 0; qi < q.length && qi < 1200; qi++) {
+        const n = q[qi];
+        if (cellIsOpenSafe(n.x, n.y)) state.reachableCells.push({ x: n.x, y: n.y });
+        for (const d of dirs) {
+          const nx = n.x + d[0], ny = n.y + d[1], key = nx + "," + ny;
+          if (seen.has(key) || tileAt(nx, ny) !== 0) continue;
+          seen.add(key);
+          q.push({ x: nx, y: ny });
+        }
+      }
+    }
+
     function moveEntity(e, dt) {
       e.x += e.vx * dt;
       resolveTileCollision(e, true);
@@ -944,27 +992,42 @@
       }
     }
 
+    function carveWideCorridor(map, ax, ay, bx, by) {
+      for (let x = Math.min(ax, bx); x <= Math.max(ax, bx); x++) {
+        for (let oy = -2; oy <= 2; oy++) if (ay + oy > 0 && ay + oy < MAP_H - 1) map[ay + oy][x] = 0;
+      }
+      for (let y = Math.min(ay, by); y <= Math.max(ay, by); y++) {
+        for (let ox = -2; ox <= 2; ox++) if (bx + ox > 0 && bx + ox < MAP_W - 1) map[y][bx + ox] = 0;
+      }
+    }
+
     function generateMap() {
       const map = Array.from({ length: MAP_H }, () => Array(MAP_W).fill(1));
-      const rooms = [];
-      const count = irand(5, 8);
-      for (let i = 0; i < count; i++) {
-        const rw = irand(5, 10);
-        const rh = irand(4, 8);
-        const rx = irand(2, MAP_W - rw - 3);
-        const ry = irand(2, MAP_H - rh - 3);
-        const room = { x: rx, y: ry, w: rw, h: rh, cx: Math.floor(rx + rw / 2), cy: Math.floor(ry + rh / 2) };
-        rooms.push(room);
-        carveRoom(map, rx, ry, rw, rh);
+      const centerY = Math.floor(MAP_H / 2) + irand(-2, 2);
+      const rooms = [
+        { x: 2, y: centerY - 5, w: 10, h: 10 },
+        { x: 14, y: centerY + irand(-7, 1), w: 11, h: 9 },
+        { x: 28, y: centerY + irand(-6, 2), w: 11, h: 9 },
+        { x: 40, y: centerY - 5, w: 4, h: 10 }
+      ];
+      if (Math.random() < .9) rooms.push({ x: irand(9, 18), y: 2, w: 10, h: 7 });
+      if (Math.random() < .9) rooms.push({ x: irand(24, 33), y: MAP_H - 9, w: 10, h: 7 });
+      for (const room of rooms) {
+        room.cx = Math.floor(room.x + room.w / 2);
+        room.cy = Math.floor(room.y + room.h / 2);
+        carveRoom(map, room.x, room.y, room.w, room.h);
       }
-      rooms.sort((a, b) => a.cx - b.cx);
-      for (let i = 1; i < rooms.length; i++) {
-        const a = rooms[i - 1], b = rooms[i];
-        for (let x = Math.min(a.cx, b.cx); x <= Math.max(a.cx, b.cx); x++) map[a.cy][x] = 0;
-        for (let y = Math.min(a.cy, b.cy); y <= Math.max(a.cy, b.cy); y++) map[y][b.cx] = 0;
+      const mainRooms = rooms.slice(0, 4);
+      for (let i = 1; i < mainRooms.length; i++) {
+        const a = mainRooms[i - 1], b = mainRooms[i];
+        carveWideCorridor(map, a.cx, a.cy, b.cx, b.cy);
       }
-      const start = rooms[0] || { cx: 4, cy: 4 };
-      const end = rooms[rooms.length - 1] || { cx: MAP_W - 4, cy: MAP_H - 4 };
+      for (let i = 4; i < rooms.length; i++) {
+        const anchor = rooms[i].y < centerY ? mainRooms[1] : mainRooms[2];
+        carveWideCorridor(map, anchor.cx, anchor.cy, rooms[i].cx, rooms[i].cy);
+      }
+      const start = mainRooms[0];
+      const end = mainRooms[3];
       map[start.cy][start.cx] = 0;
       map[end.cy][end.cx] = 0;
 
@@ -979,27 +1042,35 @@
       }
       state.player.x = start.cx * TILE + TILE / 2;
       state.player.y = start.cy * TILE + TILE / 2;
+      carveRoom(map, start.cx - 3, start.cy - 3, 7, 7);
       state.exit.x = end.cx * TILE + TILE / 2 - 22;
       state.exit.y = end.cy * TILE + TILE / 2 - 48;
+      carveRoom(map, end.cx - 3, end.cy - 3, 7, 7);
       state.exit.open = false;
       state.sealedTiles = [
-        { x: end.cx, y: end.cy - 1 },
-        { x: end.cx, y: end.cy },
-        { x: end.cx, y: end.cy + 1 }
+        { x: end.cx - 1, y: end.cy - 2 },
+        { x: end.cx - 1, y: end.cy - 1 },
+        { x: end.cx - 1, y: end.cy },
+        { x: end.cx - 1, y: end.cy + 1 },
+        { x: end.cx - 1, y: end.cy + 2 }
       ];
+      refreshFloorCells();
       return { rooms, start, end };
     }
 
     function randomFloorAway(minDist = 140) {
-      for (let i = 0; i < 500; i++) {
-        const tx = irand(2, MAP_W - 3);
-        const ty = irand(2, MAP_H - 3);
-        if (tileAt(tx, ty) === 0) {
-          const p = { x: tx * TILE + 16, y: ty * TILE + 16 };
-          if (dist(p, state.player) > minDist) return p;
-        }
+      const cells = state.reachableCells.length ? state.reachableCells : state.floorCells;
+      for (let i = 0; i < 700 && cells.length; i++) {
+        const c = cells[irand(0, cells.length - 1)];
+        const p = { x: c.x * TILE + 16, y: c.y * TILE + 16 };
+        const nearExit = Math.hypot(p.x - (state.exit.x + state.exit.w / 2), p.y - (state.exit.y + state.exit.h / 2)) < 150;
+        if (!nearExit && dist(p, state.player) > minDist) return p;
       }
-      return { x: MAP_W * TILE / 2, y: MAP_H * TILE / 2 };
+      for (const c of cells) {
+        const p = { x: c.x * TILE + 16, y: c.y * TILE + 16 };
+        if (dist(p, state.player) > 80) return p;
+      }
+      return { x: state.player.x + 180, y: state.player.y };
     }
 
     function spawnRoom() {
@@ -1016,6 +1087,7 @@
       for (const t of state.sealedTiles) {
         if (t.y > 0 && t.y < MAP_H - 1 && t.x > 0 && t.x < MAP_W - 1) state.map[t.y][t.x] = 1;
       }
+      refreshFloorCells();
 
       const bossRoom = state.room === state.maxRoom;
       if (bossRoom) {
@@ -1037,14 +1109,21 @@
         showBanner("Boss: " + bdef.name, 2.2);
         playSound("boss");
       } else {
-        const count = 5 + state.level * 2 + state.room;
+        const count = Math.min(20, 2 + state.room + state.level * 2 + Math.max(0, state.level - 2) * 2);
         for (let i = 0; i < count; i++) {
           const p = randomFloorAway();
           const roll = Math.random();
-          const kind = roll < .26 ? "archer" : roll < .48 ? "brute" : roll < .68 ? "charger" : roll < .82 ? "bomber" : "crawler";
-          const hpBase = kind === "brute" ? 55 + state.level * 9 : kind === "archer" ? 34 + state.level * 7 : kind === "charger" ? 42 + state.level * 8 : kind === "bomber" ? 30 + state.level * 7 : 28 + state.level * 6;
+          let kind;
+          if (state.level === 1 && state.room <= 2) {
+            kind = roll < .72 ? "crawler" : "archer";
+          } else if (state.level <= 2) {
+            kind = roll < .35 ? "archer" : roll < .58 ? "brute" : roll < .74 ? "charger" : "crawler";
+          } else {
+            kind = roll < .24 ? "archer" : roll < .44 ? "brute" : roll < .64 ? "charger" : roll < .8 ? "bomber" : "crawler";
+          }
+          const hpBase = kind === "brute" ? 46 + state.level * 8 : kind === "archer" ? 28 + state.level * 6 : kind === "charger" ? 34 + state.level * 7 : kind === "bomber" ? 26 + state.level * 7 : 24 + state.level * 5;
           const hp = Math.round(hpBase * state.difficulty.enemyHp);
-          const speed = kind === "crawler" ? 118 : kind === "brute" ? 70 : kind === "charger" ? 124 : kind === "bomber" ? 102 : 86;
+          const speed = kind === "crawler" ? 106 + state.level * 2 : kind === "brute" ? 66 : kind === "charger" ? 112 + state.level * 3 : kind === "bomber" ? 96 : 82;
           const color = ENEMY_TYPES[kind].color;
           state.enemies.push(makeEnemy(p.x, p.y, kind, hp, speed, color));
         }
@@ -1185,7 +1264,7 @@
       arr.push({ x, y, vx, vy, r: radius, damage, color, ttl, splash });
     }
 
-    function attack() {
+    function attack(dirX, dirY) {
       const p = state.player;
       const w = weapon();
       const g = currentGear();
@@ -1194,6 +1273,10 @@
       p.sp -= g.stamina;
       p.anim = "attack";
       p.animTime = .18;
+      if (Math.hypot(dirX || 0, dirY || 0) > .2) {
+        p.faceX = dirX;
+        p.faceY = dirY;
+      }
       const len = Math.hypot(p.faceX, p.faceY) || 1;
       const fx = p.faceX / len, fy = p.faceY / len;
       const baseAng = Math.atan2(fy, fx);
@@ -1201,15 +1284,18 @@
       setTimeout(() => ui.atkBtn.classList.remove("down"), 90);
 
       if (w.id === "bow") {
+        blockEnemyProjectiles(p.x, p.y, 74, baseAng, 1.2);
         addProjectile(p.x + fx * 20, p.y + fy * 20, fx * 520, fy * 520, rollDamage(g), w.color, false, 5, .9);
         spawnParticles(p.x + fx * 20, p.y + fy * 20, w.color, 4);
       } else if (w.id === "staff") {
+        blockEnemyProjectiles(p.x, p.y, 86, baseAng, 1.35);
         addProjectile(p.x + fx * 20, p.y + fy * 20, fx * 310, fy * 310, rollDamage(g), w.color, false, 8, 1.1, 62);
         spawnParticles(p.x + fx * 20, p.y + fy * 20, w.color, 8);
       } else {
         const range = g.range * (1 + (state.runStats?.meleeRange || 0));
         const arc = w.id === "dagger" ? .85 : w.id === "hammer" ? 1.5 : 1.25;
         state.attacks.push({ x: p.x, y: p.y, angle: baseAng, range, arc, life: .12, color: w.color });
+        blockEnemyProjectiles(p.x, p.y, range + 18, baseAng, arc);
         for (const e of state.enemies) {
           if (e.dead) continue;
           const dx = e.x - p.x, dy = e.y - p.y;
@@ -1227,6 +1313,29 @@
         }
       }
       playSound("attack");
+    }
+
+    function blockEnemyProjectiles(x, y, range, angle, arc) {
+      let blocked = 0;
+      for (const pr of state.enemyProjectiles) {
+        if (pr.dead) continue;
+        const dx = pr.x - x, dy = pr.y - y;
+        const d = Math.hypot(dx, dy);
+        if (d > range + pr.r) continue;
+        const diff = Math.atan2(Math.sin(Math.atan2(dy, dx) - angle), Math.cos(Math.atan2(dy, dx) - angle));
+        if (Math.abs(diff) > arc) continue;
+        pr.dead = true;
+        blocked++;
+        spawnParticles(pr.x, pr.y, "#bfe8ff", 8);
+        if (state.runStats?.reflect) {
+          const fx = Math.cos(angle), fy = Math.sin(angle);
+          addProjectile(pr.x, pr.y, fx * 360, fy * 360, Math.max(12, pr.damage), "#9be7ff", false, 6, 1.2);
+        }
+      }
+      if (blocked) {
+        state.shake = Math.max(state.shake, .08);
+        showBanner(state.runStats?.reflect ? "反弹！" : "格挡！", .45);
+      }
     }
 
     function rollDamage(g) {
@@ -1286,25 +1395,35 @@
       p.vy *= Math.pow(.001, dt);
       moveEntity(p, dt);
 
+      state.nearbyGear = null;
       for (const d of state.drops) {
         if (d.dead) continue;
-        if (Math.hypot(d.x - p.x, d.y - p.y) < 28) {
-          if (d.gear) {
-            p.equipped = d.gear;
-            p.weapon = d.gear.id;
-            p.owned.add(d.gear.id);
-            recalcStats();
-            showBanner("拾取 " + d.gear.name, 1.2);
-            playSound("drop");
-            saveGame();
-          } else {
+        const near = Math.hypot(d.x - p.x, d.y - p.y) < 34;
+        if (d.gear) {
+          if (near) state.nearbyGear = d;
+        } else if (near) {
             playSound("coin");
-          }
-          d.dead = true;
+            d.dead = true;
         }
       }
 
       if (state.exit.open && rectsOverlap(entityRect(p), state.exit)) nextRoom();
+    }
+
+    function pickupNearbyGear() {
+      const d = state.nearbyGear;
+      if (!d || d.dead || !d.gear || state.phase !== "running") return false;
+      const p = state.player;
+      p.equipped = JSON.parse(JSON.stringify(d.gear));
+      p.weapon = d.gear.id;
+      p.owned.add(d.gear.id);
+      recalcStats();
+      d.dead = true;
+      state.nearbyGear = null;
+      showBanner("装备 " + p.equipped.name, 1.2);
+      playSound("drop");
+      saveGame();
+      return true;
     }
 
     function findStep(e) {
@@ -1410,6 +1529,7 @@
         for (const t of state.sealedTiles) {
           if (t.y > 0 && t.y < MAP_H - 1 && t.x > 0 && t.x < MAP_W - 1) state.map[t.y][t.x] = 0;
         }
+        refreshFloorCells();
         showBanner("房间已清空，门已打开", 1);
         saveGame();
         setTimeout(offerBoons, 350);
@@ -1572,6 +1692,7 @@
       for (const a of state.attacks) drawAttack(a);
       for (const e of state.enemies) drawEnemy(e);
       drawPlayer();
+      drawAim();
       for (const p of state.particles) {
         ctx.globalAlpha = clamp(p.life * 3, 0, 1);
         drawPixelRect(p.x, p.y, p.size, p.size, p.color);
@@ -1586,12 +1707,18 @@
         for (let x = 0; x < MAP_W; x++) {
           const wx = x * TILE, wy = y * TILE;
           if (state.map[y][x] === 1) {
-            drawPixelRect(wx, wy, TILE, TILE, "#20191d");
-            drawPixelRect(wx, wy, TILE, 6, "#35272a");
-            drawPixelRect(wx + 3, wy + 8, TILE - 6, TILE - 10, "#2a2024");
+            drawPixelRect(wx, wy, TILE, TILE, "#21191e");
+            drawPixelRect(wx, wy, TILE, 5, "#3a2a2d");
+            drawPixelRect(wx + 2, wy + 7, TILE - 4, TILE - 9, "#2a2024");
+            if (tileAt(x, y + 1) === 0) drawPixelRect(wx, wy + TILE - 5, TILE, 5, "#4c352f");
+            if (tileAt(x + 1, y) === 0) drawPixelRect(wx + TILE - 5, wy, 5, TILE, "#4c352f");
           } else {
-            drawPixelRect(wx, wy, TILE, TILE, "#19191d");
-            drawPixelRect(wx + 1, wy + 1, TILE - 2, TILE - 2, "#202024");
+            drawPixelRect(wx, wy, TILE, TILE, "#17181b");
+            drawPixelRect(wx + 1, wy + 1, TILE - 2, TILE - 2, "#222126");
+            if ((x + y) % 3 === 0) drawPixelRect(wx + 4, wy + 4, TILE - 8, 2, "#2a252b");
+            if ((x * 7 + y * 11) % 13 === 0) drawPixelRect(wx + 20, wy + 18, 7, 5, "#302b2e");
+            if ((x * 5 + y * 3) % 17 === 0) drawPixelRect(wx + 7, wy + 23, 4, 4, "#141316");
+            if ((x + 2 * y) % 19 === 0) drawPixelRect(wx + 12, wy + 10, 3, 3, "#3d3438");
           }
         }
       }
@@ -1614,35 +1741,99 @@
       const p = state.player;
       ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
       const bob = p.anim === "run" ? Math.sin(now() * 18) * 2 : 0;
+      const step = p.anim === "run" ? Math.sign(Math.sin(now() * 18)) : 0;
       const squash = p.anim === "attack" ? 2 : p.anim === "hurt" ? -1 : 0;
+      ctx.globalAlpha = .35;
+      drawPixelRect(p.x - 18, p.y + 20, 36, 8, "#050506");
+      ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
       if (p.anim === "dead") {
         drawPixelRect(p.x - 18, p.y + 4, 36, 16, "#36567d");
+        drawPixelRect(p.x - 20, p.y + 2, 40, 4, "#111216");
         drawPixelRect(p.x - 24, p.y + 8, 12, 8, "#f0c48e");
         ctx.globalAlpha = 1;
         return;
       }
-      drawPixelRect(p.x - 14 - squash, p.y - 14 + bob, 28 + squash * 2, 28, "#4f83c2");
-      drawPixelRect(p.x - 10, p.y - 22 + bob, 20, 14, "#f0c48e");
-      drawPixelRect(p.x - 7 + p.faceX * 3, p.y - 17 + p.faceY * 2, 4, 3, "#161016");
-      drawPixelRect(p.x + 3 + p.faceX * 3, p.y - 17 + p.faceY * 2, 4, 3, "#161016");
-      drawPixelRect(p.x - 16, p.y + 10 - bob, 10, 12, "#2c4d78");
-      drawPixelRect(p.x + 6, p.y + 10 + bob, 10, 12, "#2c4d78");
+      drawPixelRect(p.x - 18 - p.faceX * 2, p.y - 8 + bob, 8, 16, "#6d2c39");
+      drawPixelRect(p.x + 10 - p.faceX * 2, p.y - 8 + bob, 8, 16, "#6d2c39");
+      drawPixelRect(p.x - 15 - squash, p.y - 13 + bob, 30 + squash * 2, 30, "#2f5a8a");
+      drawPixelRect(p.x - 12, p.y - 10 + bob, 24, 8, "#89aee0");
+      drawPixelRect(p.x - 13, p.y - 1 + bob, 26, 4, "#203b5d");
+      drawPixelRect(p.x - 10, p.y - 22 + bob, 20, 12, "#f0c48e");
+      drawPixelRect(p.x - 12, p.y - 24 + bob, 24, 6, "#5a3d2b");
+      drawPixelRect(p.x - 8, p.y - 26 + bob, 16, 3, "#a86f42");
+      drawPixelRect(p.x - 7 + p.faceX * 3, p.y - 17 + p.faceY * 2, 3, 3, "#120f13");
+      drawPixelRect(p.x + 4 + p.faceX * 3, p.y - 17 + p.faceY * 2, 3, 3, "#120f13");
+      drawPixelRect(p.x - 15, p.y + 10 - bob + step * 2, 11, 12, "#26415f");
+      drawPixelRect(p.x + 4, p.y + 10 + bob - step * 2, 11, 12, "#26415f");
+      drawPixelRect(p.x - 14, p.y + 10 - bob + step * 2, 3, 12, "#7fc8ff");
+      drawPixelRect(p.x + 13, p.y + 10 + bob - step * 2, 3, 12, "#7fc8ff");
       const w = weapon();
       const reach = p.anim === "attack" ? 28 : 18;
+      ctx.globalAlpha = .35;
+      drawPixelRect(p.x + p.faceX * reach - 8, p.y + p.faceY * reach - 8, 16, 16, currentGear().qualityColor || w.color);
+      ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
+      if (p.anim === "attack") {
+        ctx.globalAlpha = .55;
+        drawPixelRect(p.x + p.faceX * 18 - 10, p.y + p.faceY * 18 - 10, 20, 20, currentGear().qualityColor || w.color);
+        drawPixelRect(p.x + p.faceX * 34 - 8, p.y + p.faceY * 34 - 8, 16, 16, "#fff0c8");
+        ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
+      }
       drawPixelRect(p.x + p.faceX * reach - 4, p.y + p.faceY * reach - 4, 8, 8, currentGear().qualityColor || w.color);
+      drawPixelRect(p.x + p.faceX * (reach + 4) - 2, p.y + p.faceY * (reach + 4) - 2, 4, 4, "#fff2d0");
       ctx.globalAlpha = 1;
+    }
+
+    function drawAim() {
+      if (!aim.active) return;
+      const d = Math.hypot(aim.dx, aim.dy);
+      if (d < 8) return;
+      const fx = aim.dx / d, fy = aim.dy / d;
+      const p = state.player;
+      ctx.save();
+      ctx.globalAlpha = .72;
+      ctx.strokeStyle = "#ffd27e";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + fx * 92, p.y + fy * 92);
+      ctx.stroke();
+      drawPixelRect(p.x + fx * 100 - 6, p.y + fy * 100 - 6, 12, 12, "#ffd27e");
+      ctx.restore();
     }
 
     function drawEnemy(e) {
       ctx.globalAlpha = e.hurtCd > 0 ? .55 : 1;
       const s = e.r * 2;
-      drawPixelRect(e.x - e.r, e.y - e.r, s, s, e.color);
+      const wobble = e.boss ? Math.sin(now() * 5) * 2 : Math.sin(now() * 10 + e.x) * 1.5;
+      ctx.globalAlpha = .32;
+      drawPixelRect(e.x - e.r, e.y + e.r - 2, s, 7, "#050506");
+      ctx.globalAlpha = e.hurtCd > 0 ? .55 : 1;
+      drawPixelRect(e.x - e.r - 2, e.y - e.r - 1 + wobble, s + 4, s + 2, "#111014");
+      drawPixelRect(e.x - e.r, e.y - e.r + wobble, s, s, e.color);
+      drawPixelRect(e.x - e.r + 2, e.y - e.r + 2 + wobble, s - 4, 6, "rgba(255,255,255,.12)");
+      if (e.type === "archer") {
+        drawPixelRect(e.x - e.r - 7, e.y - 4 + wobble, 6, 18, "#9e7b47");
+        drawPixelRect(e.x + e.r + 1, e.y - 4 + wobble, 6, 18, "#9e7b47");
+        drawPixelRect(e.x - 7, e.y - 10 + wobble, 14, 9, "#d9c2a0");
+      } else if (e.type === "bomber") {
+        drawPixelRect(e.x - 9, e.y - e.r - 9 + wobble, 18, 10, e.fuse > 0 ? "#ffdf5a" : "#5a3726");
+        drawPixelRect(e.x - 4, e.y - e.r - 12 + wobble, 8, 4, "#ff8d4a");
+      } else if (e.type === "charger") {
+        drawPixelRect(e.x - e.r - 5, e.y - 4 + wobble, 7, 8, "#d9d0aa");
+        drawPixelRect(e.x + e.r - 2, e.y - 4 + wobble, 7, 8, "#d9d0aa");
+        drawPixelRect(e.x - 8, e.y - 9 + wobble, 16, 8, "#7f2f3d");
+      } else if (e.type === "brute") {
+        drawPixelRect(e.x - e.r + 2, e.y - e.r + 4 + wobble, s - 4, 8, "#49372e");
+        drawPixelRect(e.x - 9, e.y - 11 + wobble, 18, 8, "#c1aa7e");
+      }
       drawPixelRect(e.x - e.r + 4, e.y - e.r - 6, s - 8, 5, "#241818");
       drawPixelRect(e.x - e.r + 4, e.y - e.r - 6, (s - 8) * Math.max(0, e.hp / e.maxHp), 5, e.boss ? "#ffce4f" : "#d84b45");
-      drawPixelRect(e.x - 7, e.y - 3, 4, 4, "#130f12");
-      drawPixelRect(e.x + 3, e.y - 3, 4, 4, "#130f12");
+      drawPixelRect(e.x - 7, e.y - 3 + wobble, 4, 4, "#130f12");
+      drawPixelRect(e.x + 3, e.y - 3 + wobble, 4, 4, "#130f12");
+      drawPixelRect(e.x - 10, e.y + 6 + wobble, 20, 3, "#141015");
       if (e.boss) {
-        drawPixelRect(e.x - 22, e.y + e.r - 2, 44, 7, "#593b29");
+        drawPixelRect(e.x - 26, e.y - e.r - 11 + wobble, 52, 9, "#d2a54f");
+        drawPixelRect(e.x - 22, e.y + e.r - 2 + wobble, 44, 7, "#593b29");
       }
       ctx.globalAlpha = 1;
     }
@@ -1699,8 +1890,26 @@
     function drawDrop(d) {
       const bob = Math.sin(now() * 9 + d.x) * 2;
       if (d.gear) {
-        drawPixelRect(d.x - 10, d.y - 10 + bob, 20, 20, d.gear.qualityColor);
-        drawPixelRect(d.x - 5, d.y - 5 + bob, 10, 10, d.gear.color);
+        const near = state.nearbyGear === d;
+        ctx.save();
+        ctx.globalAlpha = near ? .55 : .28;
+        ctx.fillStyle = d.gear.qualityColor;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y + bob, near ? 26 : 20, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        drawPixelRect(d.x - 13, d.y - 10 + bob, 26, 20, "#151216");
+        drawPixelRect(d.x - 11, d.y - 8 + bob, 22, 16, d.gear.outline || d.gear.qualityColor);
+        drawPixelRect(d.x - 8, d.y - 5 + bob, 16, 10, d.gear.color);
+        drawPixelRect(d.x - 2, d.y - 15 + bob, 4, 24, "#efe1bf");
+        drawPixelRect(d.x - 11, d.y + 8 + bob, 22, 3, "#fff0c8");
+        if (near) {
+          ctx.font = "12px Microsoft YaHei, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#fff0c8";
+          ctx.fillText("E 拾取 " + d.gear.name, d.x, d.y - 24 + bob);
+        }
+        ctx.restore();
         return;
       }
       drawPixelRect(d.x - 6, d.y - 6 + bob, 12, 12, "#d8a645");
@@ -1708,7 +1917,7 @@
     }
 
     function drawMiniMap(vw, vh) {
-      const size = 118;
+      const size = 136;
       const x0 = vw - size - 16;
       const y0 = 96;
       const sx = size / MAP_W;
@@ -1717,14 +1926,18 @@
       ctx.scale(state.scale, state.scale);
       ctx.globalAlpha = .82;
       drawPixelRect(x0 - 6, y0 - 6, size + 12, size + 12, "rgba(12,10,12,.82)");
+      drawPixelRect(x0 - 6, y0 - 6, size + 12, 3, "#60442c");
+      drawPixelRect(x0 - 6, y0 + size + 3, size + 12, 3, "#60442c");
+      drawPixelRect(x0 - 6, y0 - 6, 3, size + 12, "#60442c");
+      drawPixelRect(x0 + size + 3, y0 - 6, 3, size + 12, "#60442c");
       for (let y = 0; y < MAP_H; y++) {
         for (let x = 0; x < MAP_W; x++) {
           drawPixelRect(x0 + x * sx, y0 + y * sy, Math.ceil(sx), Math.ceil(sy), state.map[y][x] === 1 ? "#2a2024" : "#7a6751");
         }
       }
-      drawPixelRect(x0 + state.exit.x / TILE * sx, y0 + state.exit.y / TILE * sy, 5, 5, state.exit.open ? "#ffd35d" : "#7b2626");
-      for (const e of state.enemies) drawPixelRect(x0 + e.x / TILE * sx, y0 + e.y / TILE * sy, 3, 3, e.boss ? "#ffce4f" : "#d84b45");
-      drawPixelRect(x0 + state.player.x / TILE * sx, y0 + state.player.y / TILE * sy, 4, 4, "#6fb7ff");
+      drawPixelRect(x0 + state.exit.x / TILE * sx, y0 + state.exit.y / TILE * sy, 6, 6, state.exit.open ? "#ffd35d" : "#7b2626");
+      for (const e of state.enemies) drawPixelRect(x0 + e.x / TILE * sx, y0 + e.y / TILE * sy, e.boss ? 5 : 3, e.boss ? 5 : 3, e.boss ? "#ffce4f" : "#d84b45");
+      drawPixelRect(x0 + state.player.x / TILE * sx - 1, y0 + state.player.y / TILE * sy - 1, 6, 6, "#6fb7ff");
       ctx.globalAlpha = 1;
       ctx.restore();
     }
@@ -1743,7 +1956,7 @@
       ui.ownedText.textContent = p.owned.size;
       ui.attrText.textContent = "暴击 " + Math.round(p.stats.crit * 100) + "% | 攻速 " + Math.round(p.stats.atkSpeed * 100) + "% | 移速 " + Math.round(p.stats.move * 100) + "% | 吸血 " + Math.round(p.stats.lifesteal * 100) + "% | 祝福 " + ((state.runStats && state.runStats.boons.length) || 0);
       ui.lockText.textContent = state.locked ? "封锁中" : "已开门";
-      ui.saveText.textContent = state.savedFlash > 0 ? "已存档" : "自动存档";
+      ui.saveText.textContent = state.nearbyGear ? ("按E拾取 " + state.nearbyGear.gear.name) : (state.savedFlash > 0 ? "已存档" : "自动存档");
       if (state.boss && !state.boss.dead) {
         ui.bossLine.classList.add("on");
         ui.bossFill.style.width = Math.max(0, state.boss.hp / state.boss.maxHp * 100) + "%";
@@ -1776,7 +1989,7 @@
             return;
           }
           state.player.weapon = w.id;
-          state.player.equipped = preview;
+          state.player.equipped = JSON.parse(JSON.stringify(preview));
           recalcStats();
           saveGame();
           state.shopStock[i] = makeLoot(w.id);
@@ -1792,7 +2005,7 @@
       state.shopOpen = typeof force === "boolean" ? force : !state.shopOpen;
       ui.shop.classList.toggle("on", state.shopOpen);
       if (state.shopOpen) {
-        state.shopStock = WEAPONS.map(w => makeLoot(w.id));
+        if (!state.shopStock.length) state.shopStock = WEAPONS.map(w => makeLoot(w.id));
         renderShop();
       }
     }
@@ -1866,7 +2079,9 @@
       addEventListener("keydown", e => {
         keys.add(e.code);
         if (e.code === "Space") { e.preventDefault(); attack(); }
-        if (e.code === "KeyE") toggleShop();
+        if (e.code === "KeyE") {
+          if (!pickupNearbyGear()) toggleShop();
+        }
         if (e.code === "ShiftLeft" || e.code === "ShiftRight") dash();
         if (e.code === "Enter" && state.phase === "menu") reset();
         if (e.code === "KeyR") {
@@ -1875,9 +2090,35 @@
         }
       });
       addEventListener("keyup", e => keys.delete(e.code));
-      ui.atkBtn.addEventListener("pointerdown", e => { e.preventDefault(); attack(); });
+      ui.atkBtn.addEventListener("pointerdown", e => {
+        e.preventDefault();
+        aim.active = true;
+        aim.id = e.pointerId;
+        aim.sx = e.clientX;
+        aim.sy = e.clientY;
+        aim.dx = state.player.faceX * 24;
+        aim.dy = state.player.faceY * 24;
+        ui.atkBtn.setPointerCapture(e.pointerId);
+      });
+      ui.atkBtn.addEventListener("pointermove", e => {
+        if (!aim.active || e.pointerId !== aim.id) return;
+        aim.dx = e.clientX - aim.sx;
+        aim.dy = e.clientY - aim.sy;
+      });
+      const releaseAim = e => {
+        if (!aim.active || e.pointerId !== aim.id) return;
+        const d = Math.hypot(aim.dx, aim.dy);
+        if (d > 10) attack(aim.dx / d, aim.dy / d);
+        else attack();
+        aim.active = false;
+        aim.id = null;
+        aim.dx = 0;
+        aim.dy = 0;
+      };
+      ui.atkBtn.addEventListener("pointerup", releaseAim);
+      ui.atkBtn.addEventListener("pointercancel", releaseAim);
       ui.dashBtn.addEventListener("pointerdown", e => { e.preventDefault(); dash(); });
-      ui.shopBtn.addEventListener("pointerdown", e => { e.preventDefault(); toggleShop(); });
+      ui.shopBtn.addEventListener("pointerdown", e => { e.preventDefault(); if (!pickupNearbyGear()) toggleShop(); });
       ui.closeShopBtn.onclick = () => toggleShop(false);
       ui.healBtn.onclick = () => {
         if (state.player.gold >= 20 && state.player.hp < state.player.maxHp) {
