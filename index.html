@@ -636,7 +636,9 @@
       bannerText: "",
       locked: true,
       savedFlash: 0,
+      nearbyGear: null,
       map: [],
+      floorCells: [],
       solids: [],
       floorDots: [],
       enemies: [],
@@ -716,6 +718,11 @@
 
     function currentGear() {
       if (!state.player.equipped) state.player.equipped = makeLoot(state.player.weapon);
+      const base = WEAPONS.find(w => w.id === state.player.equipped.id) || WEAPONS[0];
+      if (!state.player.equipped.qualityColor) {
+        const q = QUALITIES.find(q => q.id === state.player.equipped.quality) || QUALITIES[0];
+        state.player.equipped = { ...base, ...state.player.equipped, qualityColor: q.color, qualityName: q.name };
+      }
       return state.player.equipped;
     }
 
@@ -908,6 +915,22 @@
       return tileAt(Math.floor(x / TILE), Math.floor(y / TILE)) === 1;
     }
 
+    function refreshFloorCells() {
+      state.floorCells = [];
+      for (let y = 1; y < MAP_H - 1; y++) {
+        for (let x = 1; x < MAP_W - 1; x++) {
+          if (tileAt(x, y) !== 0) continue;
+          let open = true;
+          for (let oy = -1; oy <= 1; oy++) {
+            for (let ox = -1; ox <= 1; ox++) {
+              if (tileAt(x + ox, y + oy) === 1) open = false;
+            }
+          }
+          if (open) state.floorCells.push({ x, y });
+        }
+      }
+    }
+
     function moveEntity(e, dt) {
       e.x += e.vx * dt;
       resolveTileCollision(e, true);
@@ -1009,20 +1032,23 @@
         { x: end.cx - 1, y: end.cy + 1 },
         { x: end.cx - 1, y: end.cy + 2 }
       ];
+      refreshFloorCells();
       return { rooms, start, end };
     }
 
     function randomFloorAway(minDist = 140) {
-      for (let i = 0; i < 500; i++) {
-        const tx = irand(2, MAP_W - 3);
-        const ty = irand(2, MAP_H - 3);
-        if (tileAt(tx, ty) === 0) {
-          const p = { x: tx * TILE + 16, y: ty * TILE + 16 };
-          const nearExit = Math.hypot(p.x - (state.exit.x + state.exit.w / 2), p.y - (state.exit.y + state.exit.h / 2)) < 120;
-          if (!nearExit && dist(p, state.player) > minDist) return p;
-        }
+      const cells = state.floorCells.length ? state.floorCells : [];
+      for (let i = 0; i < 700 && cells.length; i++) {
+        const c = cells[irand(0, cells.length - 1)];
+        const p = { x: c.x * TILE + 16, y: c.y * TILE + 16 };
+        const nearExit = Math.hypot(p.x - (state.exit.x + state.exit.w / 2), p.y - (state.exit.y + state.exit.h / 2)) < 150;
+        if (!nearExit && dist(p, state.player) > minDist) return p;
       }
-      return { x: MAP_W * TILE / 2, y: MAP_H * TILE / 2 };
+      for (const c of cells) {
+        const p = { x: c.x * TILE + 16, y: c.y * TILE + 16 };
+        if (dist(p, state.player) > 80) return p;
+      }
+      return { x: state.player.x + 180, y: state.player.y };
     }
 
     function spawnRoom() {
@@ -1039,6 +1065,7 @@
       for (const t of state.sealedTiles) {
         if (t.y > 0 && t.y < MAP_H - 1 && t.x > 0 && t.x < MAP_W - 1) state.map[t.y][t.x] = 1;
       }
+      refreshFloorCells();
 
       const bossRoom = state.room === state.maxRoom;
       if (bossRoom) {
@@ -1346,25 +1373,35 @@
       p.vy *= Math.pow(.001, dt);
       moveEntity(p, dt);
 
+      state.nearbyGear = null;
       for (const d of state.drops) {
         if (d.dead) continue;
-        if (Math.hypot(d.x - p.x, d.y - p.y) < 28) {
-          if (d.gear) {
-            p.equipped = d.gear;
-            p.weapon = d.gear.id;
-            p.owned.add(d.gear.id);
-            recalcStats();
-            showBanner("拾取 " + d.gear.name, 1.2);
-            playSound("drop");
-            saveGame();
-          } else {
+        const near = Math.hypot(d.x - p.x, d.y - p.y) < 34;
+        if (d.gear) {
+          if (near) state.nearbyGear = d;
+        } else if (near) {
             playSound("coin");
-          }
-          d.dead = true;
+            d.dead = true;
         }
       }
 
       if (state.exit.open && rectsOverlap(entityRect(p), state.exit)) nextRoom();
+    }
+
+    function pickupNearbyGear() {
+      const d = state.nearbyGear;
+      if (!d || d.dead || !d.gear || state.phase !== "running") return false;
+      const p = state.player;
+      p.equipped = { ...d.gear };
+      p.weapon = d.gear.id;
+      p.owned.add(d.gear.id);
+      recalcStats();
+      d.dead = true;
+      state.nearbyGear = null;
+      showBanner("装备 " + p.equipped.name, 1.2);
+      playSound("drop");
+      saveGame();
+      return true;
     }
 
     function findStep(e) {
@@ -1470,6 +1507,7 @@
         for (const t of state.sealedTiles) {
           if (t.y > 0 && t.y < MAP_H - 1 && t.x > 0 && t.x < MAP_W - 1) state.map[t.y][t.x] = 0;
         }
+        refreshFloorCells();
         showBanner("房间已清空，门已打开", 1);
         saveGame();
         setTimeout(offerBoons, 350);
@@ -1655,6 +1693,8 @@
             drawPixelRect(wx, wy, TILE, TILE, "#18181c");
             drawPixelRect(wx + 1, wy + 1, TILE - 2, TILE - 2, "#222126");
             if ((x + y) % 3 === 0) drawPixelRect(wx + 4, wy + 4, TILE - 8, 2, "#29252a");
+            if ((x * 7 + y * 11) % 13 === 0) drawPixelRect(wx + 20, wy + 18, 7, 5, "#302b2e");
+            if ((x * 5 + y * 3) % 17 === 0) drawPixelRect(wx + 7, wy + 23, 4, 4, "#141316");
           }
         }
       }
@@ -1703,6 +1743,9 @@
       drawPixelRect(p.x + 6, p.y + 10 + bob - step * 2, 10, 12, "#2c4d78");
       const w = weapon();
       const reach = p.anim === "attack" ? 28 : 18;
+      ctx.globalAlpha = .35;
+      drawPixelRect(p.x + p.faceX * reach - 8, p.y + p.faceY * reach - 8, 16, 16, currentGear().qualityColor || w.color);
+      ctx.globalAlpha = p.hurtCd > 0 ? .65 : 1;
       if (p.anim === "attack") {
         ctx.globalAlpha = .55;
         drawPixelRect(p.x + p.faceX * 18 - 10, p.y + p.faceY * 18 - 10, 20, 20, currentGear().qualityColor || w.color);
@@ -1739,6 +1782,10 @@
       drawPixelRect(e.x - e.r, e.y + e.r - 2, s, 7, "#050506");
       ctx.globalAlpha = e.hurtCd > 0 ? .55 : 1;
       drawPixelRect(e.x - e.r, e.y - e.r + wobble, s, s, e.color);
+      drawPixelRect(e.x - e.r, e.y - e.r + wobble, s, 3, "#0f0d10");
+      drawPixelRect(e.x - e.r, e.y + e.r - 3 + wobble, s, 3, "#0f0d10");
+      drawPixelRect(e.x - e.r, e.y - e.r + wobble, 3, s, "#0f0d10");
+      drawPixelRect(e.x + e.r - 3, e.y - e.r + wobble, 3, s, "#0f0d10");
       drawPixelRect(e.x - e.r + 4, e.y - e.r + 4 + wobble, s - 8, 5, "rgba(255,255,255,.12)");
       if (e.type === "archer") {
         drawPixelRect(e.x - e.r - 7, e.y - 3 + wobble, 6, 18, "#9e7b47");
@@ -1814,8 +1861,25 @@
     function drawDrop(d) {
       const bob = Math.sin(now() * 9 + d.x) * 2;
       if (d.gear) {
-        drawPixelRect(d.x - 10, d.y - 10 + bob, 20, 20, d.gear.qualityColor);
-        drawPixelRect(d.x - 5, d.y - 5 + bob, 10, 10, d.gear.color);
+        const near = state.nearbyGear === d;
+        ctx.save();
+        ctx.globalAlpha = near ? .55 : .28;
+        ctx.fillStyle = d.gear.qualityColor;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y + bob, near ? 26 : 20, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        drawPixelRect(d.x - 12, d.y - 9 + bob, 24, 18, "#151216");
+        drawPixelRect(d.x - 10, d.y - 7 + bob, 20, 14, d.gear.qualityColor);
+        drawPixelRect(d.x - 3, d.y - 16 + bob, 6, 24, d.gear.color);
+        drawPixelRect(d.x - 10, d.y + 7 + bob, 20, 4, "#fff0c8");
+        if (near) {
+          ctx.font = "12px Microsoft YaHei, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#fff0c8";
+          ctx.fillText("E 拾取 " + d.gear.name, d.x, d.y - 24 + bob);
+        }
+        ctx.restore();
         return;
       }
       drawPixelRect(d.x - 6, d.y - 6 + bob, 12, 12, "#d8a645");
@@ -1862,7 +1926,7 @@
       ui.ownedText.textContent = p.owned.size;
       ui.attrText.textContent = "暴击 " + Math.round(p.stats.crit * 100) + "% | 攻速 " + Math.round(p.stats.atkSpeed * 100) + "% | 移速 " + Math.round(p.stats.move * 100) + "% | 吸血 " + Math.round(p.stats.lifesteal * 100) + "% | 祝福 " + ((state.runStats && state.runStats.boons.length) || 0);
       ui.lockText.textContent = state.locked ? "封锁中" : "已开门";
-      ui.saveText.textContent = state.savedFlash > 0 ? "已存档" : "自动存档";
+      ui.saveText.textContent = state.nearbyGear ? ("按E拾取 " + state.nearbyGear.gear.name) : (state.savedFlash > 0 ? "已存档" : "自动存档");
       if (state.boss && !state.boss.dead) {
         ui.bossLine.classList.add("on");
         ui.bossFill.style.width = Math.max(0, state.boss.hp / state.boss.maxHp * 100) + "%";
@@ -1895,7 +1959,7 @@
             return;
           }
           state.player.weapon = w.id;
-          state.player.equipped = preview;
+          state.player.equipped = { ...preview };
           recalcStats();
           saveGame();
           state.shopStock[i] = makeLoot(w.id);
@@ -1911,7 +1975,7 @@
       state.shopOpen = typeof force === "boolean" ? force : !state.shopOpen;
       ui.shop.classList.toggle("on", state.shopOpen);
       if (state.shopOpen) {
-        state.shopStock = WEAPONS.map(w => makeLoot(w.id));
+        if (!state.shopStock.length) state.shopStock = WEAPONS.map(w => makeLoot(w.id));
         renderShop();
       }
     }
@@ -1985,7 +2049,9 @@
       addEventListener("keydown", e => {
         keys.add(e.code);
         if (e.code === "Space") { e.preventDefault(); attack(); }
-        if (e.code === "KeyE") toggleShop();
+        if (e.code === "KeyE") {
+          if (!pickupNearbyGear()) toggleShop();
+        }
         if (e.code === "ShiftLeft" || e.code === "ShiftRight") dash();
         if (e.code === "Enter" && state.phase === "menu") reset();
         if (e.code === "KeyR") {
@@ -2022,7 +2088,7 @@
       ui.atkBtn.addEventListener("pointerup", releaseAim);
       ui.atkBtn.addEventListener("pointercancel", releaseAim);
       ui.dashBtn.addEventListener("pointerdown", e => { e.preventDefault(); dash(); });
-      ui.shopBtn.addEventListener("pointerdown", e => { e.preventDefault(); toggleShop(); });
+      ui.shopBtn.addEventListener("pointerdown", e => { e.preventDefault(); if (!pickupNearbyGear()) toggleShop(); });
       ui.closeShopBtn.onclick = () => toggleShop(false);
       ui.healBtn.onclick = () => {
         if (state.player.gold >= 20 && state.player.hp < state.player.maxHp) {
